@@ -33,8 +33,8 @@ class LocationService {
     }
   }
 
-  /// Название города по координатам (два сервиса на случай блокировки одного).
-  static Future<String> getCity(double lat, double lon) async {
+    /// Город и страна по координатам (два сервиса на случай блокировки одного).
+  static Future<(String, String?)> getCity(double lat, double lon) async {
     try {
       final uri = Uri.https('api.bigdatacloud.net', '/data/reverse-geocode-client', {
         'latitude': '$lat',
@@ -46,7 +46,10 @@ class LocationService {
         final j = jsonDecode(res.body) as Map<String, dynamic>;
         for (final key in ['city', 'locality', 'principalSubdivision']) {
           final v = j[key];
-          if (v is String && v.isNotEmpty) return v;
+          if (v is String && v.isNotEmpty) {
+            final c = j['countryName'];
+            return (v, c is String && c.isNotEmpty ? c : null);
+          }
         }
       }
     } catch (_) {}
@@ -63,10 +66,13 @@ class LocationService {
         final a = (jsonDecode(res.body)['address'] ?? {}) as Map<String, dynamic>;
         for (final key in ['city', 'town', 'village', 'municipality', 'state']) {
           final v = a[key];
-          if (v is String && v.isNotEmpty) return v;
+          if (v is String && v.isNotEmpty) {
+            final c = a['country'];
+            return (v, c is String && c.isNotEmpty ? c : null);
+          }
         }
       }
     } catch (_) {}
-    return 'Ваше местоположение';
-  }
+    return ('Ваше местоположение', null);
+    }
 }

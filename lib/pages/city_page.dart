@@ -21,6 +21,7 @@ class CityPage extends StatefulWidget {
 class _CityPageState extends State<CityPage> with AutomaticKeepAliveClientMixin {
   Weather? w;
   String? placeName;
+  String? placeRegion;
   String? error;
 
   @override
@@ -40,8 +41,13 @@ class _CityPageState extends State<CityPage> with AutomaticKeepAliveClientMixin 
         final pos = await LocationService.getPosition();
         lat = pos.latitude;
         lon = pos.longitude;
-        LocationService.getCity(lat, lon).then((n) {
-          if (mounted) setState(() => placeName = n);
+                LocationService.getCity(lat, lon).then((p) {
+          if (mounted) {
+            setState(() {
+              placeName = p.$1;
+              placeRegion = p.$2;
+            });
+          }
         });
       }
       final res = await WeatherService.fetch(lat, lon, isGps: widget.city.isGps);
@@ -57,8 +63,10 @@ class _CityPageState extends State<CityPage> with AutomaticKeepAliveClientMixin 
     }
   }
 
-  String get _title => widget.city.isGps ? 'Моё местоположение' : widget.city.name;
-  String get _sub => widget.city.isGps ? (placeName ?? '') : (widget.city.region ?? '');
+  String get _title =>
+      widget.city.isGps ? (placeName ?? 'Определяем…') : widget.city.name;
+  String get _sub =>
+      widget.city.isGps ? (placeRegion ?? '') : (widget.city.region ?? '');
 
   @override
   Widget build(BuildContext context) {
@@ -131,7 +139,25 @@ class _CityPageState extends State<CityPage> with AutomaticKeepAliveClientMixin 
   Widget _header(Weather x, WeatherInfo info) {
     final today = x.days.isNotEmpty ? x.days.first : null;
     return Column(children: [
-      Text(_title, textAlign: TextAlign.center, style: _big),
+            Row(
+        mainAxisAlignment: MainAxisAlignment.center,
+        mainAxisSize: MainAxisSize.min,
+        children: [
+          if (widget.city.isGps)
+            const Padding(
+              padding: EdgeInsets.only(right: 8),
+              child: Icon(Icons.near_me, color: Colors.white, size: 26),
+            ),
+          Flexible(
+            child: Text(
+              _title,
+              textAlign: TextAlign.center,
+              overflow: TextOverflow.ellipsis,
+              style: _big,
+            ),
+          ),
+        ],
+      ),
       if (_sub.isNotEmpty)
         Text(_sub, style: const TextStyle(color: Colors.white70, fontSize: 15)),
       const SizedBox(height: 8),
