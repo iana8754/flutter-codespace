@@ -1,5 +1,6 @@
+import 'dart:convert';
 import 'package:geolocator/geolocator.dart';
-import 'package:geocoding/geocoding.dart';
+import 'package:http/http.dart' as http;
 
 class LocationService {
   static Future<Position> getPosition() async {
@@ -19,12 +20,23 @@ class LocationService {
 
   static Future<String> getCity(double lat, double lon) async {
     try {
-      final p = (await placemarkFromCoordinates(lat, lon)).first;
-      return p.locality?.isNotEmpty == true
-          ? p.locality!
-          : (p.administrativeArea ?? 'Ваше местоположение');
-    } catch (_) {
-      return 'Ваше местоположение';
-    }
+      final uri = Uri.https(
+        'api.bigdatacloud.net',
+        '/data/reverse-geocode-client',
+        {
+          'latitude': '$lat',
+          'longitude': '$lon',
+          'localityLanguage': 'ru',
+        },
+      );
+      final res = await http.get(uri).timeout(const Duration(seconds: 10));
+      if (res.statusCode != 200) return 'Ваше местоположение';
+      final j = jsonDecode(res.body) as Map<String, dynamic>;
+      for (final key in ['city', 'locality', 'principalSubdivision']) {
+        final v = j[key];
+        if (v is String && v.isNotEmpty) return v;
+      }
+    } catch (_) {}
+    return 'Ваше местоположение';
   }
 }
