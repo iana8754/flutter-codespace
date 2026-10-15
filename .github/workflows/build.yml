@@ -31,7 +31,7 @@ jobs:
           rm -rf build_app/lib
           cp -r lib build_app/lib
           cd build_app
-          flutter pub add http geolocator geocoding intl
+                    flutter pub add http geolocator intl shared_preferences
 
       - name: Добавить разрешения Android
         run: |
