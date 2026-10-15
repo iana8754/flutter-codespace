@@ -143,10 +143,10 @@ class _CityPageState extends State<CityPage> with AutomaticKeepAliveClientMixin 
         mainAxisAlignment: MainAxisAlignment.center,
         mainAxisSize: MainAxisSize.min,
         children: [
-          if (widget.city.isGps)
+                    if (widget.city.isGps)
             const Padding(
-              padding: EdgeInsets.only(right: 8),
-              child: Icon(Icons.near_me, color: Colors.white, size: 26),
+              padding: EdgeInsets.only(right: 6),
+              child: Icon(Icons.location_on_outlined, color: Colors.white, size: 32),
             ),
           Flexible(
             child: Text(
@@ -159,7 +159,7 @@ class _CityPageState extends State<CityPage> with AutomaticKeepAliveClientMixin 
         ],
       ),
       if (_sub.isNotEmpty)
-        Text(_sub, style: const TextStyle(color: Colors.white70, fontSize: 15)),
+                Text(_sub, style: const TextStyle(color: Colors.white70, fontSize: 18)),
       const SizedBox(height: 8),
       Text('${x.temp.round()}°',
           style: const TextStyle(
