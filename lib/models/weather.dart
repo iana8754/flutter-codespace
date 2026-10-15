@@ -71,7 +71,7 @@ WeatherInfo infoFor(int c, {bool isDay = true}) {
   if (c == 1) return WeatherInfo(isDay ? '🌤️' : '🌙', 'Малооблачно', pick(clearDay, clearNight));
   if (c == 2) return WeatherInfo(isDay ? '⛅' : '☁️', 'Переменная облачность', pick(cloudDay, cloudNight));
   if (c == 3) return WeatherInfo('☁️', 'Пасмурно', pick(cloudDay, cloudNight));
-  if (c == 45 || c == 48) return WeatherInfo('🌫️', 'Туман', foggy);
+  if (c == 45 || c == 48) return const WeatherInfo('🌫️', 'Туман', foggy);
   if (c >= 51 && c <= 57) return WeatherInfo('🌦️', 'Морось', pick(rainDay, rainNight));
   if (c == 66 || c == 67) return WeatherInfo('🌧️', 'Ледяной дождь', pick(rainDay, rainNight));
   if (c >= 61 && c <= 65) return WeatherInfo('🌧️', 'Дождь', pick(rainDay, rainNight));
@@ -79,7 +79,7 @@ WeatherInfo infoFor(int c, {bool isDay = true}) {
   if ((c >= 71 && c <= 77) || c == 85 || c == 86) {
     return WeatherInfo('❄️', 'Снег', pick(snowDay, snowNight));
   }
-  if (c >= 95) return WeatherInfo('⛈️', 'Гроза', stormy);
+    if (c >= 95) return const WeatherInfo('⛈️', 'Гроза', stormy);
   return WeatherInfo('🌡️', 'Нет данных', pick(cloudDay, cloudNight));
 }
 
