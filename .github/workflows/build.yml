@@ -8,23 +8,31 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
+
       - uses: actions/setup-java@v4
         with:
           distribution: temurin
           java-version: "17"
+
       - uses: subosito/flutter-action@v2
         with:
           channel: stable
+
       - name: Создать Android-часть проекта
         run: flutter create --platforms=android --org com.mycloud --project-name my_cloud .
+
       - name: Разрешения (интернет и камера)
         run: |
           sed -i 's|<application|<uses-permission android:name="android.permission.INTERNET"/>\n    <uses-permission android:name="android.permission.CAMERA"/>\n    <application|' android/app/src/main/AndroidManifest.xml
           sed -i 's|android:label="my_cloud"|android:label="Моё облако"|' android/app/src/main/AndroidManifest.xml
-            - name: Принудительно compileSdk 36 для плагинов
-            run: python3 fix_gradle.py
+
+      - name: Принудительно compileSdk 36 для плагинов
+        run: python3 fix_gradle.py
+
       - run: flutter pub get
+
       - run: flutter build apk --release
+
       - uses: actions/upload-artifact@v4
         with:
           name: my-cloud-apk
