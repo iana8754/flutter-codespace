@@ -15,7 +15,7 @@ SupabaseClient get sb => Supabase.instance.client;
 
 Future<void> main() async {
   WidgetsFlutterBinding.ensureInitialized();
-  await Supabase.initialize(url: supabaseUrl, anonKey: supabaseKey);
+  await Supabase.initialize(url: supabaseUrl, publishableKey: supabaseKey);
   runApp(const MyApp());
 }
 
@@ -235,11 +235,12 @@ class _HomePageState extends State<HomePage> {
           objs.where((f) => isImageName(f.name)).map((f) => '$_uid/${f.name}').toList();
       final urls = <String, String>{};
       if (imgPaths.isNotEmpty) {
-        final signed = await store.createSignedUrls(imgPaths, 3600);
-        for (final s in signed) {
-          urls[s.path] = s.signedUrl;
-        }
-      }
+        await Future.wait(imgPaths.map((p) async {
+          try {
+        urls[p] = await store.createSignedUrl(p, 3600);
+      } catch (_) {}
+    }));
+    }
       _files = objs.map((f) {
         final sz = f.metadata?['size'];
         return CloudFile(f.name, urls['$_uid/${f.name}'], sz is int ? sz : null);
@@ -324,7 +325,7 @@ class _HomePageState extends State<HomePage> {
   void _showAddSheet() {
     Widget tile(IconData i, String t, Color c, VoidCallback onTap) => ListTile(
           leading: CircleAvatar(
-              backgroundColor: c.withOpacity(.15), child: Icon(i, color: c)),
+              backgroundColor: c.withValues(alpha: .15), child: Icon(i, color: c)),
           title: Text(t, style: const TextStyle(fontWeight: FontWeight.w600)),
           onTap: () {
             Navigator.pop(context);
@@ -379,7 +380,7 @@ class _HomePageState extends State<HomePage> {
                       ? ListView(children: [
                           SizedBox(height: MediaQuery.of(context).size.height * .25),
                           Icon(Icons.cloud_upload_outlined,
-                              size: 96, color: cs.primary.withOpacity(.5)),
+                              size: 96, color: cs.primary.withValues(alpha: .5)),
                           const SizedBox(height: 12),
                           const Center(
                               child: Text('Здесь пока пусто',
@@ -430,7 +431,7 @@ class _HomePageState extends State<HomePage> {
                   ? Image.network(f.thumbUrl!, fit: BoxFit.cover,
                       errorBuilder: (_, __, ___) => Icon(Icons.broken_image, color: color))
                   : Container(
-                      color: color.withOpacity(.1),
+                      color: color.withValues(alpha: .1),
                       child: Icon(icon, size: 56, color: color)),
             ),
           ),
