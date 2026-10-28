@@ -7,7 +7,7 @@ import 'package:url_launcher/url_launcher.dart';
 
 // ====== ВСТАВЬТЕ СВОИ ДАННЫЕ ИЗ SUPABASE (Settings -> API) ======
 const supabaseUrl = 'https://ljmpxywhmryovewazols.supabase.co/rest/v1/';
-const supabaseKey = 'https://ljmpxywhmryovewazols.supabase.co/rest/v1/';
+const supabaseKey = 'sb_publishable_wTHI1OthW6K1qy_yixpLVw_hwlannoh';
 // ================================================================
 
 const bucket = 'files';
