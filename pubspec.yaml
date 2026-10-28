@@ -1,5 +1,5 @@
-name: cloud_drive
-description: Мой Диск - облачное хранилище файлов, фото и видео.
+name: my_cloud
+description: Личное облачное хранилище
 publish_to: none
 version: 1.0.0+1
 
@@ -13,6 +13,10 @@ dependencies:
   image_picker: ^1.1.2
   file_picker: ^8.1.2
   url_launcher: ^6.3.0
+
+dev_dependencies:
+  flutter_test:
+    sdk: flutter
 
 flutter:
   uses-material-design: true
