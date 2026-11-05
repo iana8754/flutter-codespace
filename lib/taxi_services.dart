@@ -10,12 +10,6 @@ class RouteInfo {
 }
 class TaxiService {
  static final Dio dio=Dio(BaseOptions(connectTimeout: const Duration(seconds:8),receiveTimeout: const Duration(seconds:12)));
- static double _traffic() {
-  final h=DateTime.now().hour;
-  if ((h>=7&&h<=10)||(h>=16&&h<=19)) return 1.35;
-  if(h>=11&&h<=15) return 1.15;
-  return 1.0;
- }
  static double _distance(LatLng a,LatLng b) {
   const r=6371.0; final d1=(b.latitude-a.latitude)*math.pi/180, d2=(b.longitude-a.longitude)*math.pi/180;
   final x=math.sin(d1/2)*math.sin(d1/2)+math.cos(a.latitude*math.pi/180)*math.cos(b.latitude*math.pi/180)*math.sin(d2/2)*math.sin(d2/2);
@@ -29,7 +23,7 @@ class TaxiService {
    if(routes.isNotEmpty) { final r=routes.first; km=(r['distance'] as num).toDouble()/1000; minutes=((r['duration'] as num).toDouble()/60).round();
     pts=(r['geometry']['coordinates'] as List).map((p)=>LatLng((p[1] as num).toDouble(),(p[0] as num).toDouble())).toList(); }
   } catch (_) {}
-  final factor=_traffic(), adjusted=(minutes*factor).ceil().clamp(1,300);
+  const factor=1.0; final adjusted=minutes.clamp(1,300);
   return RouteInfo(pts,km,adjusted,factor,double.parse((2.50+km*.85+adjusted*.12).toStringAsFixed(2)));
  }
  static Future<void> saveProfile(String role,String name,String phone) async {
