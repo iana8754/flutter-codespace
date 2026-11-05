@@ -21,7 +21,7 @@ class _DriverHomeState extends State<DriverHome> {
  return ListView.builder(itemCount:visible.length,itemBuilder:(c,i){final r=visible[i],mine=r.driverId==sb.auth.currentUser!.id;
  return Card(margin:const EdgeInsets.symmetric(horizontal:12,vertical:6),child:Padding(padding:const EdgeInsets.all(12),child:Column(crossAxisAlignment:CrossAxisAlignment.start,children:[
  Text('${r.pickupLabel} → ${r.destinationLabel}',style:const TextStyle(fontWeight:FontWeight.bold)),
- Text('${r.distanceKm.toStringAsFixed(1)} км • ${r.durationMin} мин • ${r.price.toStringAsFixed(2)} €'),Text(r.statusText),const SizedBox(height:8),
+ Text('${r.distanceKm.toStringAsFixed(1)} км • ${r.durationMin} мин • ${r.price.toStringAsFixed(2)} €'),Text(r.statusText),const SizedBox(height:8),SizedBox(height:170,child:TaxiMap(from:r.pickup,to:r.destination,route:[r.pickup,r.destination])),const SizedBox(height:8),
  if(!mine)FilledButton(onPressed:online?()=>accept(r):null,child:const Text('Принять заказ'))
  else Wrap(spacing:8,children:[
  if(r.status=='accepted')FilledButton(onPressed:()=>status(r,'arriving'),child:const Text('Еду к пассажиру')),
