@@ -1,0 +1,61 @@
+name: Build Android Taxi Apps
+
+on:
+  workflow_dispatch:
+  push:
+    branches: [main, master]
+    paths:
+      - "lib/**"
+      - "android/**"
+      - "pubspec.yaml"
+      - ".github/workflows/build-android.yml"
+
+permissions:
+  contents: read
+
+jobs:
+  build:
+    name: Build passenger and driver APKs
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Set up Java
+        uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: "17"
+
+      - name: Set up Flutter
+        uses: subosito/flutter-action@v2
+        with:
+          channel: stable
+          cache: true
+
+      - name: Show Flutter version
+        run: flutter --version
+
+      - name: Install dependencies
+        run: flutter pub get
+
+      - name: Build passenger APK (T2)
+        run: flutter build apk --release --flavor passenger -t lib/main.dart
+
+      - name: Build driver APK (T1)
+        run: flutter build apk --release --flavor driver -t lib/driver_main.dart
+
+      - name: Rename APK files
+        run: |
+          mkdir -p dist
+          cp build/app/outputs/flutter-apk/app-passenger-release.apk dist/Taxi-Passenger-T2.apk
+          cp build/app/outputs/flutter-apk/app-driver-release.apk dist/Taxi-Driver-T1.apk
+          ls -lh dist
+
+      - name: Upload APK files
+        uses: actions/upload-artifact@v4
+        with:
+          name: taxi-android-apks
+          path: dist/*.apk
+          if-no-files-found: error
+          retention-days: 30
