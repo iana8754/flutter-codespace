@@ -1,6 +1,13 @@
 .dart_tool/
-build/
-.flutter-plugins*
 .packages
-*.iml
+.pub/
+build/
+.flutter-plugins
+.flutter-plugins-dependencies
+.metadata
 .idea/
+.vscode/
+*.iml
+.env
+.env.*
+assets/dgissdk.key

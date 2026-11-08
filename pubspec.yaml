@@ -1,26 +1,17 @@
 name: taxi_app
-description: Связанные приложения пассажира и водителя такси
+description: Приложение такси на Flutter
 publish_to: none
 version: 1.0.0+1
 
 environment:
-  sdk: ">=3.3.0 <4.0.0"
+  sdk: ">=3.4.1 <4.0.0"
 
 dependencies:
   flutter:
     sdk: flutter
+  dgis_mobile_sdk_full: ^14.2.0
   supabase_flutter: ^2.8.0
-  flutter_map: ^7.0.2
-  latlong2: ^0.9.1
   geolocator: ^14.1.2
-  dio: ^5.7.0
-  url_launcher: ^6.3.0
-  google_maps_flutter: ^2.19.0
-  http: ^1.6.0
-  firebase_core: ^5.1.0
-  cloud_firestore: ^7.1.0
-  firebase_auth: ^7.0.1
-  yandex_maps_mapkit: ^4.45.0
 
 dev_dependencies:
   flutter_test:
@@ -29,3 +20,5 @@ dev_dependencies:
 
 flutter:
   uses-material-design: true
+  assets:
+    - assets/dgissdk.key
