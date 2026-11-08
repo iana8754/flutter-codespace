@@ -24,9 +24,7 @@ jobs:
       - run: flutter pub get
 
       - name: Build release APK
-        env:
-          MAPKIT_API_KEY: ${{ secrets.MAPKIT_API_KEY }}
-        run: flutter build apk --release --flavor passenger --dart-define=MAPKIT_API_KEY=$MAPKIT_API_KEY
+        run: flutter build apk --release --flavor passenger
 
       - uses: actions/upload-artifact@v4
         with:
