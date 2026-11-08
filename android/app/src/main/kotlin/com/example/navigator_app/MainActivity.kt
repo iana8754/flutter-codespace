@@ -1,4 +1,4 @@
-package com.mycloud.my_cloud
+package com.example.navigator_app
 
 import io.flutter.embedding.android.FlutterActivity
 
