@@ -18,10 +18,7 @@ class TaxiApp extends StatelessWidget {
       ),
       home: const Scaffold(
         body: Center(
-          child: Text(
-            'Проект такси готов к разработке',
-            textAlign: TextAlign.center,
-          ),
+          child: Text('Такси — проект готов к разработке'),
         ),
       ),
     );
