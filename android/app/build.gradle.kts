@@ -4,6 +4,9 @@ plugins {
 }
 
 android {
+    buildFeatures {
+        resValues = true
+    }
     namespace = "com.mycloud.my_cloud"
     compileSdk = flutter.compileSdkVersion
     ndkVersion = flutter.ndkVersion
