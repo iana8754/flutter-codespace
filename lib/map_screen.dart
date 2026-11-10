@@ -17,6 +17,9 @@ import 'widgets.dart';
 
 enum _Field { from, to }
 
+const _blue = Color(0xFF2F80ED);
+const _red = Color(0xFFE53935);
+
 final class _MapInput implements ymk.MapInputListener {
   _MapInput({required this.onTap, required this.onLongTap});
   final void Function(ymk.Point) onTap;
@@ -49,6 +52,8 @@ class _MapScreenState extends State<MapScreen> with WidgetsBindingObserver {
   ymimg.ImageProvider? _iconFrom;
   ymimg.ImageProvider? _iconTo;
   ymimg.ImageProvider? _iconStop;
+  String _iconFromText = '';
+  String _iconToText = '';
   bool _trafficOn = true;
 
   // ---- геолокация ----
@@ -64,13 +69,14 @@ class _MapScreenState extends State<MapScreen> with WidgetsBindingObserver {
   final _toCtrl = TextEditingController();
   final _fromFocus = FocusNode();
   final _toFocus = FocusNode();
-  final _sheet = DraggableScrollableController();
   Timer? _debounce;
   AppPlace? _from; // null = «моё местоположение»
   AppPlace? _to;
-  _Field? _active; // какое поле сейчас редактируется
-  _Field? _picking; // ждём нажатия на карту для этого поля
+  bool _searchOpen = false;
+  _Field _active = _Field.to;
+  _Field? _picking;
   List<Suggestion> _suggestions = [];
+  int _geoToken = 0;
 
   // ---- маршруты ----
   TravelMode _mode = TravelMode.drive;
@@ -79,6 +85,7 @@ class _MapScreenState extends State<MapScreen> with WidgetsBindingObserver {
   final Set<TravelMode> _loading = {};
   int _selected = 0;
   int _gen = 0;
+  bool _expanded = false;
   bool _navigating = false;
 
   RouteResult? get _current {
@@ -108,7 +115,6 @@ class _MapScreenState extends State<MapScreen> with WidgetsBindingObserver {
     _toCtrl.dispose();
     _fromFocus.dispose();
     _toFocus.dispose();
-    _sheet.dispose();
     super.dispose();
   }
 
@@ -126,16 +132,6 @@ class _MapScreenState extends State<MapScreen> with WidgetsBindingObserver {
       ..showSnackBar(SnackBar(content: Text(msg)));
   }
 
-  void _sheetTo(double size) {
-    if (_sheet.isAttached) {
-      _sheet.animateTo(
-        size,
-        duration: const Duration(milliseconds: 250),
-        curve: Curves.easeOut,
-      );
-    }
-  }
-
   // ======================= Карта =======================
 
   Future<void> _onMapCreated(ymk.MapWindow window) async {
@@ -144,15 +140,9 @@ class _MapScreenState extends State<MapScreen> with WidgetsBindingObserver {
     _routeLayer = window.map.mapObjects.addCollection();
     _markerLayer = window.map.mapObjects.addCollection();
 
-    _mapInput = _MapInput(onTap: _onMapTap, onLongTap: _onMapLongTap);
+    _mapInput = _MapInput(onTap: _onMapTap, onLongTap: _onMapTap);
     window.map.addInputListener(_mapInput!);
 
-    _iconFrom = ymimg.ImageProvider.fromImageProvider(
-      MemoryImage(await makeDotIcon(fill: const Color(0xFF2F80ED))),
-    );
-    _iconTo = ymimg.ImageProvider.fromImageProvider(
-      MemoryImage(await makeDotIcon(fill: const Color(0xFFE53935), size: 84)),
-    );
     _iconStop = ymimg.ImageProvider.fromImageProvider(
       MemoryImage(await makeDotIcon(fill: const Color(0xFF455A64), size: 44, ring: 8)),
     );
@@ -194,35 +184,65 @@ class _MapScreenState extends State<MapScreen> with WidgetsBindingObserver {
     _traffic?.setTrafficVisible(_trafficOn);
   }
 
-  // Нажатия на карту: выбор точки «Откуда/Куда».
+  /// Нажатие на карту: ставит точку с подписью адреса.
   void _onMapTap(ymk.Point p) {
-    if (!mounted || _picking == null) return;
-    _applyPicked(p);
+    if (!mounted || _navigating || _searchOpen) return;
+    _setPlaceFromMap(_picking ?? _Field.to, p);
   }
 
-  void _onMapLongTap(ymk.Point p) {
-    if (!mounted) return;
-    if (_picking != null) {
-      _applyPicked(p);
-    } else {
-      _setPlace(_Field.to, _placeFromPoint(p));
-    }
-  }
+  bool _samePoint(ymk.Point a, ymk.Point b) =>
+      (a.latitude - b.latitude).abs() < 1e-9 &&
+      (a.longitude - b.longitude).abs() < 1e-9;
 
-  AppPlace _placeFromPoint(ymk.Point p) => AppPlace(
-        name: 'Точка на карте',
-        address:
-            '${p.latitude.toStringAsFixed(5)}, ${p.longitude.toStringAsFixed(5)}',
+  void _setPlaceFromMap(_Field f, ymk.Point p) {
+    final coords =
+        '${p.latitude.toStringAsFixed(5)}, ${p.longitude.toStringAsFixed(5)}';
+    _setPlace(f, AppPlace(name: 'Определяем адрес…', address: coords, point: p));
+    final token = ++_geoToken;
+
+    void apply(String? name) {
+      if (!mounted || token != _geoToken) return;
+      final current = f == _Field.from ? _from : _to;
+      if (current == null || !_samePoint(current.point, p)) return;
+      final place = AppPlace(
+        name: name ?? 'Точка на карте',
+        address: name == null ? coords : '',
         point: p,
       );
+      setState(() {
+        if (f == _Field.from) {
+          _from = place;
+          _fromCtrl.text = place.name;
+        } else {
+          _to = place;
+          _toCtrl.text = place.name;
+        }
+      });
+      _refreshIcons();
+    }
 
-  void _applyPicked(ymk.Point p) {
-    final f = _picking;
-    if (f == null) return;
-    _setPlace(f, _placeFromPoint(p));
+    _search.reverse(p, onResult: apply, onError: (_) => apply(null));
   }
 
   // ---- отрисовка маршрутов и маркеров ----
+
+  Future<void> _refreshIcons() async {
+    try {
+      final to = _to;
+      if (to != null && _iconToText != to.name) {
+        final bytes = await makeLabelIcon(text: to.name, color: _red);
+        _iconTo = ymimg.ImageProvider.fromImageProvider(MemoryImage(bytes));
+        _iconToText = to.name;
+      }
+      final from = _from;
+      if (from != null && _iconFromText != from.name) {
+        final bytes = await makeLabelIcon(text: from.name, color: _blue);
+        _iconFrom = ymimg.ImageProvider.fromImageProvider(MemoryImage(bytes));
+        _iconFromText = from.name;
+      }
+    } catch (_) {}
+    if (mounted) _redraw();
+  }
 
   void _redraw({bool fit = false}) {
     final layer = _routeLayer;
@@ -233,27 +253,23 @@ class _MapScreenState extends State<MapScreen> with WidgetsBindingObserver {
 
     final list = _results[_mode] ?? const <RouteResult>[];
     final cur = _current;
-    if (list.isNotEmpty && cur != null) {
+    if (_to != null && list.isNotEmpty && cur != null) {
       for (var i = 0; i < list.length; i++) {
         if (identical(list[i], cur)) continue;
         layer.addPolylineWithGeometry(list[i].full)
-          ..style = const ymk.LineStyle(
-            strokeWidth: 6.0,
-            outlineWidth: 1.5,
-            outlineColor: Colors.white,
-          )
-          ..setStrokeColor(Colors.grey.shade600);
+          ..strokeWidth = 6.0
+          ..setStrokeColor(Colors.grey.shade600)
+          ..outlineWidth = 1.5
+          ..outlineColor = Colors.white;
       }
       for (final seg in cur.segments) {
         layer.addPolylineWithGeometry(seg.polyline)
-          ..style = ymk.LineStyle(
-            strokeWidth: seg.width,
-            outlineWidth: 2.5,
-            outlineColor: Colors.white,
-          )
-          ..setStrokeColor(seg.color);
+          ..strokeWidth = seg.width
+          ..setStrokeColor(seg.color)
+          ..outlineWidth = 2.5
+          ..outlineColor = Colors.white;
       }
-      if (_mode == TravelMode.transit) {
+      if (_mode == TravelMode.transit && _iconStop != null) {
         for (final s in cur.stops) {
           markers.addPlacemark()
             ..geometry = s.point
@@ -262,17 +278,17 @@ class _MapScreenState extends State<MapScreen> with WidgetsBindingObserver {
       }
     }
 
-    final to = _to;
-    if (to != null && _iconTo != null) {
-      markers.addPlacemark()
-        ..geometry = to.point
-        ..setIcon(_iconTo!);
-    }
     final from = _from;
     if (from != null && _iconFrom != null) {
       markers.addPlacemark()
         ..geometry = from.point
         ..setIcon(_iconFrom!);
+    }
+    final to = _to;
+    if (to != null && _iconTo != null) {
+      markers.addPlacemark()
+        ..geometry = to.point
+        ..setIcon(_iconTo!);
     }
 
     if (fit && cur != null) _fit(cur.points);
@@ -318,24 +334,40 @@ class _MapScreenState extends State<MapScreen> with WidgetsBindingObserver {
     if (!node.hasFocus) return;
     final ctrl = f == _Field.from ? _fromCtrl : _toCtrl;
     ctrl.selection = TextSelection(baseOffset: 0, extentOffset: ctrl.text.length);
+    if (mounted) {
+      setState(() {
+        _active = f;
+        _suggestions = [];
+      });
+    }
+  }
+
+  void _openSearch(_Field f) {
     setState(() {
+      _searchOpen = true;
       _active = f;
-      _picking = null;
       _suggestions = [];
+      _picking = null;
     });
-    _sheetTo(0.92);
+    _focusField(f);
+  }
+
+  void _focusField(_Field f) {
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      if (!mounted) return;
+      (f == _Field.from ? _fromFocus : _toFocus).requestFocus();
+    });
   }
 
   void _closeSearch() {
     FocusManager.instance.primaryFocus?.unfocus();
     setState(() {
-      _active = null;
+      _searchOpen = false;
       _suggestions = [];
     });
-    _sheetTo(_to == null ? 0.38 : 0.55);
   }
 
-  void _onQuery(_Field f, String text) {
+  void _onQuery(String text) {
     setState(() {});
     _debounce?.cancel();
     if (text.trim().length < 2) {
@@ -387,19 +419,12 @@ class _MapScreenState extends State<MapScreen> with WidgetsBindingObserver {
       setState(() {
         _from = null;
         _fromCtrl.text = _meLabel;
-        _active = null;
-        _suggestions = [];
       });
-      FocusManager.instance.primaryFocus?.unfocus();
-      _sheetTo(0.55);
-      _calculate();
+      _afterPlaceChanged();
     } else {
       final me = _me;
       if (me == null) return;
-      _setPlace(
-        _Field.to,
-        AppPlace(name: _meLabel, address: '', point: me),
-      );
+      _setPlace(_Field.to, AppPlace(name: _meLabel, address: '', point: me));
     }
   }
 
@@ -407,16 +432,12 @@ class _MapScreenState extends State<MapScreen> with WidgetsBindingObserver {
     FocusManager.instance.primaryFocus?.unfocus();
     setState(() {
       _picking = f;
-      _active = null;
+      _searchOpen = false;
       _suggestions = [];
     });
-    _sheetTo(0.14);
   }
 
-  void _cancelPick() {
-    setState(() => _picking = null);
-    _sheetTo(0.38);
-  }
+  void _cancelPick() => setState(() => _picking = null);
 
   void _setPlace(_Field f, AppPlace p) {
     setState(() {
@@ -427,21 +448,33 @@ class _MapScreenState extends State<MapScreen> with WidgetsBindingObserver {
         _to = p;
         _toCtrl.text = p.name;
       }
-      _active = null;
+    });
+    _afterPlaceChanged();
+  }
+
+  /// Общая часть после смены точки: закрыть поиск или перейти к «Куда».
+  void _afterPlaceChanged() {
+    final needDestination = _to == null;
+    setState(() {
       _picking = null;
       _suggestions = [];
+      _searchOpen = needDestination && _searchOpen;
+      if (_searchOpen) _active = _Field.to;
     });
-    FocusManager.instance.primaryFocus?.unfocus();
-    _sheetTo(0.55);
-    _calculate();
+    if (_searchOpen) {
+      _focusField(_Field.to);
+    } else {
+      FocusManager.instance.primaryFocus?.unfocus();
+    }
+    _refreshIcons();
+    if (_to != null) _calculate();
   }
 
   void _swap() {
     final to = _to;
     if (to == null) return;
-    final oldFrom = _from;
     final me = _me;
-    final newTo = oldFrom ??
+    final newTo = _from ??
         (me != null ? AppPlace(name: _meLabel, address: '', point: me) : null);
     setState(() {
       _from = to;
@@ -449,6 +482,7 @@ class _MapScreenState extends State<MapScreen> with WidgetsBindingObserver {
       _to = newTo;
       _toCtrl.text = newTo?.name ?? '';
     });
+    _refreshIcons();
     _calculate();
   }
 
@@ -517,13 +551,17 @@ class _MapScreenState extends State<MapScreen> with WidgetsBindingObserver {
     _posSub?.cancel();
     _posSub = null;
     _gen++;
+    _geoToken++;
     setState(() {
+      _from = null;
       _to = null;
+      _fromCtrl.text = _meLabel;
       _toCtrl.clear();
       _results.clear();
       _errors.clear();
       _loading.clear();
       _navigating = false;
+      _expanded = false;
     });
     _redraw();
   }
@@ -563,24 +601,29 @@ class _MapScreenState extends State<MapScreen> with WidgetsBindingObserver {
   Widget build(BuildContext context) {
     if (kMapkitKey.isEmpty) return const _NoKey();
     final top = MediaQuery.of(context).padding.top;
+    final scheme = Theme.of(context).colorScheme;
+    final idle = _to == null && !_searchOpen && _picking == null && !_navigating;
+    final showPanel = _to != null && !_searchOpen && _picking == null && !_navigating;
+
     return Scaffold(
       resizeToAvoidBottomInset: false,
       body: Stack(
         children: [
           YandexMap(onMapCreated: _onMapCreated),
+          if (idle)
+            Positioned(top: top + 12, left: 12, right: 12, child: _idleBar(scheme)),
           if (_picking != null)
-            Positioned(top: top + 12, left: 12, right: 72, child: _pickBanner()),
+            Positioned(top: top + 12, left: 12, right: 72, child: _pickBanner(scheme)),
           Positioned(
             right: 12,
-            top: top + 12,
+            top: top + (idle ? 76 : 12),
             child: Column(
               children: [
                 FloatingActionButton.small(
                   heroTag: 'traffic',
                   tooltip: 'Пробки',
-                  backgroundColor: _trafficOn
-                      ? Theme.of(context).colorScheme.primaryContainer
-                      : Theme.of(context).colorScheme.surface,
+                  backgroundColor:
+                      _trafficOn ? scheme.primaryContainer : scheme.surface,
                   onPressed: _toggleTraffic,
                   child: const Icon(Icons.traffic),
                 ),
@@ -595,30 +638,51 @@ class _MapScreenState extends State<MapScreen> with WidgetsBindingObserver {
             ),
           ),
           if (_navigating)
-            Align(alignment: Alignment.bottomCenter, child: _navBar())
-          else
-            Positioned.fill(
-              child: DraggableScrollableSheet(
-                controller: _sheet,
-                initialChildSize: 0.38,
-                minChildSize: 0.14,
-                maxChildSize: 0.92,
-                snap: true,
-                snapSizes: const [0.14, 0.38, 0.6, 0.92],
-                builder: (context, scroll) => _sheetBody(context, scroll),
-              ),
-            ),
+            Align(alignment: Alignment.bottomCenter, child: _navBar(scheme)),
+          if (showPanel)
+            Align(alignment: Alignment.bottomCenter, child: _routePanel(scheme)),
+          if (_searchOpen) Positioned.fill(child: _searchOverlay(scheme)),
         ],
       ),
     );
   }
 
-  Widget _pickBanner() {
+  // ---- Главный экран: строка поиска ----
+
+  Widget _idleBar(ColorScheme scheme) {
+    return Material(
+      elevation: 6,
+      color: scheme.surface,
+      borderRadius: BorderRadius.circular(28),
+      child: InkWell(
+        borderRadius: BorderRadius.circular(28),
+        onTap: () => _openSearch(_Field.to),
+        child: Padding(
+          padding: const EdgeInsets.symmetric(horizontal: 18, vertical: 15),
+          child: Row(
+            children: [
+              Icon(Icons.search, color: scheme.onSurfaceVariant),
+              const SizedBox(width: 12),
+              Expanded(
+                child: Text(
+                  'Куда едем?',
+                  style: TextStyle(fontSize: 16, color: scheme.onSurfaceVariant),
+                ),
+              ),
+              const Icon(Icons.directions, color: _blue),
+            ],
+          ),
+        ),
+      ),
+    );
+  }
+
+  Widget _pickBanner(ColorScheme scheme) {
     final what = _picking == _Field.from ? 'откуда' : 'куда';
     return Material(
       elevation: 4,
       borderRadius: BorderRadius.circular(14),
-      color: Theme.of(context).colorScheme.surface,
+      color: scheme.surface,
       child: Padding(
         padding: const EdgeInsets.fromLTRB(14, 4, 4, 4),
         child: Row(
@@ -631,9 +695,435 @@ class _MapScreenState extends State<MapScreen> with WidgetsBindingObserver {
     );
   }
 
-  Widget _navBar() {
+  // ---- Экран поиска адресов ----
+
+  Widget _searchOverlay(ColorScheme scheme) {
+    final keyboard = MediaQuery.of(context).viewInsets.bottom;
+    return Material(
+      color: scheme.surface,
+      child: SafeArea(
+        child: Column(
+          children: [
+            Padding(
+              padding: const EdgeInsets.fromLTRB(4, 8, 4, 8),
+              child: Row(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  IconButton(
+                    tooltip: 'Назад',
+                    onPressed: _closeSearch,
+                    icon: const Icon(Icons.arrow_back),
+                  ),
+                  Expanded(
+                    child: Column(
+                      children: [
+                        _textField(_fromCtrl, _fromFocus, 'Откуда',
+                            Icons.trip_origin, _blue, _Field.from),
+                        const SizedBox(height: 8),
+                        _textField(_toCtrl, _toFocus, 'Куда', Icons.location_on,
+                            _red, _Field.to),
+                      ],
+                    ),
+                  ),
+                  IconButton(
+                    tooltip: 'Поменять местами',
+                    onPressed: _swap,
+                    icon: const Icon(Icons.swap_vert),
+                  ),
+                ],
+              ),
+            ),
+            const Divider(height: 1),
+            Expanded(
+              child: ListView(
+                padding: EdgeInsets.only(bottom: 16 + keyboard),
+                children: [
+                  ListTile(
+                    leading: const CircleAvatar(
+                      backgroundColor: _blue,
+                      child: Icon(Icons.my_location, color: Colors.white, size: 20),
+                    ),
+                    title: const Text(_meLabel),
+                    onTap: () => _useMyLocation(_active),
+                  ),
+                  ListTile(
+                    leading: CircleAvatar(
+                      backgroundColor: scheme.secondaryContainer,
+                      child: Icon(Icons.pin_drop_outlined,
+                          color: scheme.onSecondaryContainer, size: 20),
+                    ),
+                    title: const Text('Выбрать на карте'),
+                    onTap: () => _startPick(_active),
+                  ),
+                  const Divider(height: 1),
+                  for (final s in _suggestions)
+                    ListTile(
+                      leading: Icon(Icons.place_outlined, color: scheme.onSurfaceVariant),
+                      title: Text(s.title, maxLines: 1, overflow: TextOverflow.ellipsis),
+                      subtitle: s.subtitle.isEmpty
+                          ? null
+                          : Text(s.subtitle, maxLines: 1, overflow: TextOverflow.ellipsis),
+                      onTap: () => _pickSuggestion(_active, s),
+                    ),
+                ],
+              ),
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+
+  Widget _textField(
+    TextEditingController ctrl,
+    FocusNode node,
+    String hint,
+    IconData icon,
+    Color color,
+    _Field f,
+  ) {
+    return TextField(
+      controller: ctrl,
+      focusNode: node,
+      onChanged: _onQuery,
+      textInputAction: TextInputAction.search,
+      decoration: InputDecoration(
+        hintText: hint,
+        isDense: true,
+        filled: true,
+        prefixIcon: Icon(icon, color: color, size: 20),
+        suffixIcon: ctrl.text.isEmpty
+            ? null
+            : IconButton(
+                icon: const Icon(Icons.close, size: 18),
+                onPressed: () {
+                  ctrl.clear();
+                  setState(() => _suggestions = []);
+                },
+              ),
+        border: OutlineInputBorder(
+          borderRadius: BorderRadius.circular(14),
+          borderSide: BorderSide.none,
+        ),
+        contentPadding: const EdgeInsets.symmetric(vertical: 12),
+      ),
+    );
+  }
+
+  // ---- Нижняя панель маршрута ----
+
+  Widget _routePanel(ColorScheme scheme) {
+    final cur = _current;
+    final maxH = MediaQuery.sizeOf(context).height * 0.72;
+    return GestureDetector(
+      onVerticalDragEnd: (d) {
+        final v = d.primaryVelocity ?? 0;
+        if (v < -250 && !_expanded) setState(() => _expanded = true);
+        if (v > 250 && _expanded) setState(() => _expanded = false);
+      },
+      child: Material(
+        elevation: 14,
+        color: scheme.surface,
+        borderRadius: const BorderRadius.vertical(top: Radius.circular(24)),
+        clipBehavior: Clip.antiAlias,
+        child: SafeArea(
+          top: false,
+          child: AnimatedSize(
+            duration: const Duration(milliseconds: 220),
+            curve: Curves.easeOut,
+            alignment: Alignment.topCenter,
+            child: ConstrainedBox(
+              constraints: BoxConstraints(maxHeight: maxH),
+              child: Column(
+                mainAxisSize: MainAxisSize.min,
+                crossAxisAlignment: CrossAxisAlignment.stretch,
+                children: [
+                  _handle(scheme),
+                  _addressBlock(scheme),
+                  Padding(
+                    padding: const EdgeInsets.fromLTRB(13, 6, 13, 0),
+                    child: Row(
+                      children: [
+                        for (final m in TravelMode.values)
+                          Expanded(
+                            child: Padding(
+                              padding: const EdgeInsets.symmetric(horizontal: 3),
+                              child: _modeTile(m, scheme),
+                            ),
+                          ),
+                      ],
+                    ),
+                  ),
+                  _summaryRow(scheme, cur),
+                  if (_expanded && cur != null)
+                    Flexible(
+                      child: SingleChildScrollView(
+                        padding: const EdgeInsets.fromLTRB(16, 0, 16, 16),
+                        child: _details(scheme, cur),
+                      ),
+                    ),
+                ],
+              ),
+            ),
+          ),
+        ),
+      ),
+    );
+  }
+
+  Widget _handle(ColorScheme scheme) {
+    return GestureDetector(
+      behavior: HitTestBehavior.opaque,
+      onTap: () => setState(() => _expanded = !_expanded),
+      child: SizedBox(
+        height: 24,
+        child: Center(
+          child: Container(
+            width: 40,
+            height: 4,
+            decoration: BoxDecoration(
+              color: scheme.outlineVariant,
+              borderRadius: BorderRadius.circular(2),
+            ),
+          ),
+        ),
+      ),
+    );
+  }
+
+  /// Откуда → куда: всегда на виду, и в свёрнутой, и в развёрнутой панели.
+  Widget _addressBlock(ColorScheme scheme) {
+    final to = _to!;
+    final fromText = _from?.name ?? _meLabel;
+    return Padding(
+      padding: const EdgeInsets.fromLTRB(16, 0, 4, 0),
+      child: Row(
+        children: [
+          Expanded(
+            child: Column(
+              children: [
+                InkWell(
+                  borderRadius: BorderRadius.circular(8),
+                  onTap: () => _openSearch(_Field.from),
+                  child: Padding(
+                    padding: const EdgeInsets.symmetric(vertical: 8),
+                    child: Row(
+                      children: [
+                        const Icon(Icons.trip_origin, size: 18, color: _blue),
+                        const SizedBox(width: 12),
+                        Expanded(
+                          child: Text(
+                            fromText,
+                            maxLines: 1,
+                            overflow: TextOverflow.ellipsis,
+                            style: TextStyle(color: scheme.onSurfaceVariant),
+                          ),
+                        ),
+                      ],
+                    ),
+                  ),
+                ),
+                Divider(height: 1, indent: 30, color: scheme.outlineVariant),
+                InkWell(
+                  borderRadius: BorderRadius.circular(8),
+                  onTap: () => _openSearch(_Field.to),
+                  child: Padding(
+                    padding: const EdgeInsets.symmetric(vertical: 8),
+                    child: Row(
+                      children: [
+                        const Icon(Icons.location_on, size: 18, color: _red),
+                        const SizedBox(width: 12),
+                        Expanded(
+                          child: Column(
+                            crossAxisAlignment: CrossAxisAlignment.start,
+                            children: [
+                              Text(
+                                to.name,
+                                maxLines: 1,
+                                overflow: TextOverflow.ellipsis,
+                                style: const TextStyle(
+                                  fontSize: 16,
+                                  fontWeight: FontWeight.w600,
+                                ),
+                              ),
+                              if (to.address.isNotEmpty)
+                                Text(
+                                  to.address,
+                                  maxLines: 1,
+                                  overflow: TextOverflow.ellipsis,
+                                  style: TextStyle(
+                                    fontSize: 12,
+                                    color: scheme.onSurfaceVariant,
+                                  ),
+                                ),
+                            ],
+                          ),
+                        ),
+                      ],
+                    ),
+                  ),
+                ),
+              ],
+            ),
+          ),
+          Column(
+            children: [
+              IconButton(
+                visualDensity: VisualDensity.compact,
+                tooltip: 'Поменять местами',
+                onPressed: _swap,
+                icon: const Icon(Icons.swap_vert),
+              ),
+              IconButton(
+                visualDensity: VisualDensity.compact,
+                tooltip: 'Закрыть маршрут',
+                onPressed: _clearAll,
+                icon: const Icon(Icons.close),
+              ),
+            ],
+          ),
+        ],
+      ),
+    );
+  }
+
+  Widget _modeTile(TravelMode m, ColorScheme scheme) {
+    final selected = m == _mode;
+    final list = _results[m];
+    Widget trailing;
+    if (_loading.contains(m)) {
+      trailing = const SizedBox(
+        width: 14,
+        height: 14,
+        child: CircularProgressIndicator(strokeWidth: 2),
+      );
+    } else if (list != null && list.isNotEmpty) {
+      trailing = Text(
+        formatDuration(list.first.seconds),
+        style: const TextStyle(fontWeight: FontWeight.w700),
+      );
+    } else {
+      trailing = const Text('—');
+    }
+    return InkWell(
+      borderRadius: BorderRadius.circular(14),
+      onTap: () => _setMode(m),
+      child: Container(
+        padding: const EdgeInsets.symmetric(vertical: 8),
+        decoration: BoxDecoration(
+          borderRadius: BorderRadius.circular(14),
+          color: selected ? scheme.primaryContainer : scheme.surfaceContainerHighest,
+        ),
+        child: Column(
+          children: [
+            Icon(m.icon, size: 22),
+            const SizedBox(height: 2),
+            Text(m.label, style: const TextStyle(fontSize: 12)),
+            const SizedBox(height: 2),
+            trailing,
+          ],
+        ),
+      ),
+    );
+  }
+
+  Widget _summaryRow(ColorScheme scheme, RouteResult? cur) {
+    Widget left;
+    if (_loading.contains(_mode)) {
+      left = const LinearProgressIndicator();
+    } else if (_errors[_mode] != null) {
+      left = Text(_errors[_mode]!, style: TextStyle(color: scheme.error));
+    } else if (cur != null) {
+      final big = _mode == TravelMode.transit
+          ? formatDuration(cur.seconds)
+          : '${formatDuration(cur.seconds)} · ${formatDistance(cur.meters)}';
+      left = Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Text(big, style: const TextStyle(fontSize: 20, fontWeight: FontWeight.w700)),
+          Text(
+            _summaryText(cur),
+            style: TextStyle(fontSize: 12, color: scheme.onSurfaceVariant),
+          ),
+        ],
+      );
+    } else {
+      left = const SizedBox.shrink();
+    }
+
+    return Padding(
+      padding: const EdgeInsets.fromLTRB(16, 10, 8, 12),
+      child: Row(
+        children: [
+          Expanded(child: left),
+          IconButton(
+            tooltip: _expanded ? 'Свернуть' : 'Подробнее',
+            onPressed: () => setState(() => _expanded = !_expanded),
+            icon: Icon(_expanded ? Icons.expand_more : Icons.expand_less),
+          ),
+          FilledButton.icon(
+            onPressed: cur == null ? null : _startNav,
+            icon: const Icon(Icons.navigation),
+            label: const Text('В путь'),
+          ),
+        ],
+      ),
+    );
+  }
+
+  String _summaryText(RouteResult r) {
+    switch (r.mode) {
+      case TravelMode.drive:
+        return 'С учётом текущих пробок';
+      case TravelMode.walk:
+        return 'Пешеходный маршрут';
+      case TravelMode.transit:
+        final transfers =
+            r.transfers == 0 ? 'без пересадок' : 'пересадок: ${r.transfers}';
+        return 'Пешком ${formatDistance(r.walkMeters)} · $transfers';
+    }
+  }
+
+  Widget _details(ColorScheme scheme, RouteResult cur) {
+    final list = _results[_mode] ?? const <RouteResult>[];
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        if (list.length > 1) ...[
+          const Text('Варианты', style: TextStyle(fontWeight: FontWeight.w600)),
+          const SizedBox(height: 8),
+          SizedBox(
+            height: 84,
+            child: ListView.separated(
+              scrollDirection: Axis.horizontal,
+              itemCount: list.length,
+              separatorBuilder: (context, index) => const SizedBox(width: 8),
+              itemBuilder: (context, i) => RouteCard(
+                route: list[i],
+                selected: identical(list[i], cur),
+                onTap: () => _selectRoute(i),
+              ),
+            ),
+          ),
+          const SizedBox(height: 12),
+        ],
+        if (cur.steps.isNotEmpty) ...[
+          const Text('Как ехать', style: TextStyle(fontWeight: FontWeight.w600)),
+          const SizedBox(height: 4),
+          for (final s in cur.steps) StepTile(step: s),
+        ] else if (list.length <= 1)
+          Text(
+            'Для этого способа других вариантов нет.',
+            style: TextStyle(color: scheme.onSurfaceVariant),
+          ),
+      ],
+    );
+  }
+
+  // ---- Панель во время поездки ----
+
+  Widget _navBar(ColorScheme scheme) {
     final r = _current;
-    final scheme = Theme.of(context).colorScheme;
     final detail = r == null
         ? ''
         : _mode == TravelMode.transit
@@ -671,271 +1161,6 @@ class _MapScreenState extends State<MapScreen> with WidgetsBindingObserver {
         ),
       ),
     );
-  }
-
-  Widget _sheetBody(BuildContext context, ScrollController scroll) {
-    final scheme = Theme.of(context).colorScheme;
-    final keyboard = MediaQuery.of(context).viewInsets.bottom;
-    return Material(
-      elevation: 12,
-      color: scheme.surface,
-      borderRadius: const BorderRadius.vertical(top: Radius.circular(24)),
-      clipBehavior: Clip.antiAlias,
-      child: ListView(
-        controller: scroll,
-        padding: EdgeInsets.fromLTRB(16, 10, 16, 24 + keyboard),
-        children: _sheetChildren(scheme),
-      ),
-    );
-  }
-
-  List<Widget> _sheetChildren(ColorScheme scheme) {
-    final children = <Widget>[
-      Center(
-        child: Container(
-          width: 40,
-          height: 4,
-          margin: const EdgeInsets.only(bottom: 12),
-          decoration: BoxDecoration(
-            color: scheme.outlineVariant,
-            borderRadius: BorderRadius.circular(2),
-          ),
-        ),
-      ),
-      _fieldsBlock(),
-    ];
-
-    if (_active != null) {
-      children.addAll(_searchList());
-      return children;
-    }
-
-    if (_to == null) {
-      children.add(Padding(
-        padding: const EdgeInsets.only(top: 16),
-        child: Text(
-          'Введите адрес или место в поле «Куда». Можно выбрать точку на карте '
-          '(кнопка в списке) или поставить её долгим нажатием на карту.',
-          style: TextStyle(color: scheme.onSurfaceVariant),
-        ),
-      ));
-      return children;
-    }
-
-    children.add(const SizedBox(height: 12));
-    children.add(Row(
-      children: [
-        for (final m in TravelMode.values)
-          Expanded(
-            child: Padding(
-              padding: const EdgeInsets.symmetric(horizontal: 3),
-              child: _modeTile(m, scheme),
-            ),
-          ),
-      ],
-    ));
-
-    final list = _results[_mode];
-    final cur = _current;
-    if (_loading.contains(_mode)) {
-      children.add(const Padding(
-        padding: EdgeInsets.only(top: 16),
-        child: LinearProgressIndicator(),
-      ));
-    } else if (_errors[_mode] != null) {
-      children.add(Padding(
-        padding: const EdgeInsets.only(top: 16),
-        child: Text(
-          _errors[_mode]!,
-          style: TextStyle(color: scheme.error),
-        ),
-      ));
-    } else if (list != null && list.isNotEmpty && cur != null) {
-      children.add(const SizedBox(height: 12));
-      children.add(SizedBox(
-        height: 84,
-        child: ListView.separated(
-          scrollDirection: Axis.horizontal,
-          itemCount: list.length,
-          separatorBuilder: (_, _) => const SizedBox(width: 8),
-          itemBuilder: (_, i) => RouteCard(
-            route: list[i],
-            selected: identical(list[i], cur),
-            onTap: () => _selectRoute(i),
-          ),
-        ),
-      ));
-      children.add(const SizedBox(height: 8));
-      children.add(Text(
-        _summaryText(cur),
-        style: TextStyle(color: scheme.onSurfaceVariant),
-      ));
-      children.add(const SizedBox(height: 12));
-      children.add(SizedBox(
-        width: double.infinity,
-        child: FilledButton.icon(
-          onPressed: _startNav,
-          icon: const Icon(Icons.navigation),
-          label: Text(
-            _mode == TravelMode.transit
-                ? 'В путь · ${formatDuration(cur.seconds)}'
-                : 'В путь · ${formatDuration(cur.seconds)} · ${formatDistance(cur.meters)}',
-          ),
-        ),
-      ));
-      if (cur.steps.isNotEmpty) {
-        children.add(const Divider(height: 28));
-        for (final s in cur.steps) {
-          children.add(StepTile(step: s));
-        }
-      }
-    }
-    return children;
-  }
-
-  String _summaryText(RouteResult r) {
-    switch (r.mode) {
-      case TravelMode.drive:
-        return 'Время указано с учётом текущих пробок';
-      case TravelMode.walk:
-        return 'Пешком ${formatDistance(r.meters)}';
-      case TravelMode.transit:
-        final transfers = r.transfers == 0
-            ? 'без пересадок'
-            : 'пересадок: ${r.transfers}';
-        return 'Пешком ${formatDistance(r.walkMeters)} · $transfers';
-    }
-  }
-
-  Widget _modeTile(TravelMode m, ColorScheme scheme) {
-    final selected = m == _mode;
-    final list = _results[m];
-    Widget trailing;
-    if (_loading.contains(m)) {
-      trailing = const SizedBox(
-        width: 14,
-        height: 14,
-        child: CircularProgressIndicator(strokeWidth: 2),
-      );
-    } else if (list != null && list.isNotEmpty) {
-      trailing = Text(
-        formatDuration(list.first.seconds),
-        style: const TextStyle(fontWeight: FontWeight.w600),
-      );
-    } else {
-      trailing = const Text('—');
-    }
-    return InkWell(
-      borderRadius: BorderRadius.circular(14),
-      onTap: () => _setMode(m),
-      child: Container(
-        padding: const EdgeInsets.symmetric(vertical: 8),
-        decoration: BoxDecoration(
-          borderRadius: BorderRadius.circular(14),
-          color: selected ? scheme.primaryContainer : scheme.surfaceContainerHighest,
-        ),
-        child: Column(
-          children: [
-            Icon(m.icon, size: 22),
-            const SizedBox(height: 2),
-            Text(m.label, style: const TextStyle(fontSize: 12)),
-            const SizedBox(height: 2),
-            trailing,
-          ],
-        ),
-      ),
-    );
-  }
-
-  Widget _fieldsBlock() {
-    return Row(
-      children: [
-        Expanded(
-          child: Column(
-            children: [
-              _input(_fromCtrl, _fromFocus, 'Откуда', Icons.trip_origin,
-                  const Color(0xFF2F80ED), _Field.from),
-              const SizedBox(height: 8),
-              _input(_toCtrl, _toFocus, 'Куда', Icons.location_on,
-                  const Color(0xFFE53935), _Field.to),
-            ],
-          ),
-        ),
-        Column(
-          children: [
-            IconButton(
-              tooltip: 'Поменять местами',
-              onPressed: _swap,
-              icon: const Icon(Icons.swap_vert),
-            ),
-            if (_to != null)
-              IconButton(
-                tooltip: 'Сбросить',
-                onPressed: _clearAll,
-                icon: const Icon(Icons.close),
-              ),
-          ],
-        ),
-      ],
-    );
-  }
-
-  Widget _input(
-    TextEditingController ctrl,
-    FocusNode node,
-    String hint,
-    IconData icon,
-    Color color,
-    _Field f,
-  ) {
-    return TextField(
-      controller: ctrl,
-      focusNode: node,
-      onChanged: (t) => _onQuery(f, t),
-      textInputAction: TextInputAction.search,
-      decoration: InputDecoration(
-        hintText: hint,
-        isDense: true,
-        filled: true,
-        prefixIcon: Icon(icon, color: color, size: 20),
-        border: OutlineInputBorder(
-          borderRadius: BorderRadius.circular(14),
-          borderSide: BorderSide.none,
-        ),
-        contentPadding: const EdgeInsets.symmetric(vertical: 12),
-      ),
-    );
-  }
-
-  List<Widget> _searchList() {
-    final f = _active!;
-    return [
-      const SizedBox(height: 8),
-      ListTile(
-        leading: const Icon(Icons.my_location),
-        title: const Text(_meLabel),
-        onTap: () => _useMyLocation(f),
-      ),
-      ListTile(
-        leading: const Icon(Icons.pin_drop_outlined),
-        title: const Text('Выбрать на карте'),
-        onTap: () => _startPick(f),
-      ),
-      const Divider(height: 1),
-      for (final s in _suggestions)
-        ListTile(
-          leading: const Icon(Icons.place_outlined),
-          title: Text(s.title, maxLines: 1, overflow: TextOverflow.ellipsis),
-          subtitle: s.subtitle.isEmpty
-              ? null
-              : Text(s.subtitle, maxLines: 1, overflow: TextOverflow.ellipsis),
-          onTap: () => _pickSuggestion(f, s),
-        ),
-      Align(
-        alignment: Alignment.centerRight,
-        child: TextButton(onPressed: _closeSearch, child: const Text('Закрыть')),
-      ),
-    ];
   }
 }
 

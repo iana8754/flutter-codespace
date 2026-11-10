@@ -18,12 +18,8 @@ class RoutingService {
   tr.MasstransitSession? _pedestrianSession;
   tr.MasstransitSession? _transitSession;
 
-  // ignore: unused_field
-  dir.DrivingSessionRouteListener? _drivingListener;
-  // ignore: unused_field
-  tr.RouteHandler? _pedestrianHandler;
-  // ignore: unused_field
-  tr.RouteHandler? _transitHandler;
+  /// MapKit хранит слабые ссылки: слушатели должны жить, пока идёт запрос.
+  final Map<String, Object> _alive = {};
 
   List<ymk.RequestPoint> _points(ymk.Point from, ymk.Point to) => [
         ymk.RequestPoint(from, ymk.RequestPointType.Waypoint, null, null, null),
@@ -52,12 +48,10 @@ class RoutingService {
         }
       },
       onDrivingRoutesError: (error) {
-        if (!c.isCompleted) {
-          c.completeError(RouteException(error.toString()));
-        }
+        if (!c.isCompleted) c.completeError(RouteException(error.toString()));
       },
     );
-    _drivingListener = listener;
+    _alive['drive'] = listener;
     _drivingSession = _driving!.requestRoutes(
       dir.DrivingOptions(routesCount: 3),
       dir.DrivingVehicleOptions(),
@@ -140,7 +134,7 @@ class RoutingService {
         if (!c.isCompleted) c.completeError(RouteException(error.toString()));
       },
     );
-    _pedestrianHandler = handler;
+    _alive['walk'] = handler;
     _pedestrianSession = _pedestrian!.requestRoutes(
       const tr.TimeOptions(),
       const tr.RouteOptions(tr.FitnessOptions()),
@@ -175,7 +169,7 @@ class RoutingService {
         if (!c.isCompleted) c.completeError(RouteException(error.toString()));
       },
     );
-    _transitHandler = handler;
+    _alive['transit'] = handler;
     _transitSession = _transit!.requestRoutes(
       const tr.TransitOptions(tr.TimeOptions()),
       const tr.RouteOptions(tr.FitnessOptions()),
@@ -284,9 +278,6 @@ class RoutingService {
     _drivingSession?.cancel();
     _pedestrianSession?.cancel();
     _transitSession?.cancel();
-    // Слушатели нужны, пока живы сессии.
-    _drivingListener = null;
-    _pedestrianHandler = null;
-    _transitHandler = null;
+    _alive.clear();
   }
 }
