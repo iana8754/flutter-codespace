@@ -100,6 +100,7 @@ class _MapScreenState extends State<MapScreen> with WidgetsBindingObserver {
   int _offRouteCount = 0;
   int _navTick = 0;
   double _lastAzimuth = 0.0;
+  double _speedKmh = 0;
   DateTime _lastCam = DateTime.fromMillisecondsSinceEpoch(0);
 
   RouteResult? get _current {
@@ -664,6 +665,14 @@ class _MapScreenState extends State<MapScreen> with WidgetsBindingObserver {
     _offRouteCount = 0;
   }
 
+  /// Чем быстрее едем, тем дальше отъезжает камера (как в навигаторах).
+  double _followZoom() {
+    if (_mode == TravelMode.walk) return 18.0;
+    if (_speedKmh < 25) return 17.5;
+    if (_speedKmh < 60) return 16.5;
+    return 15.5;
+  }
+
   void _moveCamera(ymk.Point point, double zoom, double azimuth) {
     try {
       _window?.map.move(ymk.CameraPosition(
@@ -691,7 +700,7 @@ class _MapScreenState extends State<MapScreen> with WidgetsBindingObserver {
       _navTick = 0;
     });
     final me = _me;
-    if (me != null) _moveCamera(me, 16.5, 0.0);
+    if (me != null) _moveCamera(me, _followZoom(), 0.0);
     Crumbs.mark('в путь: подписка на GPS');
     _posSub = Geolocator.getPositionStream(
       locationSettings: const LocationSettings(
@@ -710,6 +719,9 @@ class _MapScreenState extends State<MapScreen> with WidgetsBindingObserver {
       final me = ymk.Point(latitude: p.latitude, longitude: p.longitude);
       _me = me;
       _navTick++;
+      final v = p.speed;
+      final kmh = (v.isNaN || v < 0) ? 0.0 : v * 3.6;
+      setState(() => _speedKmh = kmh);
       if (_navTick % 10 == 1) {
         Crumbs.mark('в путь: GPS ${p.latitude.toStringAsFixed(5)} '
             '${p.longitude.toStringAsFixed(5)} v=${p.speed.toStringAsFixed(1)}');
@@ -757,7 +769,7 @@ class _MapScreenState extends State<MapScreen> with WidgetsBindingObserver {
           if (p.speed > 1.0 && !p.heading.isNaN && p.heading >= 0) {
             _lastAzimuth = p.heading % 360;
           }
-          _moveCamera(me, 16.5, _lastAzimuth);
+          _moveCamera(me, _followZoom(), _lastAzimuth);
         }
       }
     } catch (e) {
@@ -817,6 +829,12 @@ class _MapScreenState extends State<MapScreen> with WidgetsBindingObserver {
               ],
             ),
           ),
+          if (_navigating)
+            Positioned(
+              left: 12,
+              bottom: MediaQuery.of(context).padding.bottom + 104,
+              child: _speedBadge(scheme),
+            ),
           if (_navigating)
             Align(alignment: Alignment.bottomCenter, child: _navBar(scheme)),
           if (showPanel)
@@ -1302,6 +1320,28 @@ class _MapScreenState extends State<MapScreen> with WidgetsBindingObserver {
 
   // ---- Панель во время поездки ----
 
+  Widget _speedBadge(ColorScheme scheme) {
+    return Material(
+      elevation: 6,
+      shape: const CircleBorder(),
+      color: scheme.surface,
+      child: SizedBox(
+        width: 64,
+        height: 64,
+        child: Column(
+          mainAxisAlignment: MainAxisAlignment.center,
+          children: [
+            Text(
+              _speedKmh.round().toString(),
+              style: const TextStyle(fontSize: 22, fontWeight: FontWeight.w800),
+            ),
+            Text('км/ч', style: TextStyle(fontSize: 10, color: scheme.onSurfaceVariant)),
+          ],
+        ),
+      ),
+    );
+  }
+
   String _hhmm(DateTime t) =>
       '${t.hour.toString().padLeft(2, '0')}:${t.minute.toString().padLeft(2, '0')}';
 
@@ -1328,6 +1368,7 @@ class _MapScreenState extends State<MapScreen> with WidgetsBindingObserver {
               const SizedBox(width: 12),
               Expanded(
                 child: Column(
+                  mainAxisSize: MainAxisSize.min,
                   crossAxisAlignment: CrossAxisAlignment.start,
                   children: [
                     Text(
@@ -1345,7 +1386,13 @@ class _MapScreenState extends State<MapScreen> with WidgetsBindingObserver {
               ),
               IconButton(
                 tooltip: _follow ? 'Не следить за мной' : 'Следить за мной',
-                onPressed: () => setState(() => _follow = !_follow),
+                onPressed: () {
+                  setState(() => _follow = !_follow);
+                  final me = _me;
+                  if (_follow && me != null) {
+                    _moveCamera(me, _followZoom(), _lastAzimuth);
+                  }
+                },
                 icon: Icon(_follow ? Icons.my_location : Icons.location_searching),
               ),
               FilledButton.tonal(onPressed: _stopNav, child: const Text('Завершить')),
