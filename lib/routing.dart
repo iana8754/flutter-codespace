@@ -5,6 +5,7 @@ import 'package:yandex_maps_mapkit/directions.dart' as dir;
 import 'package:yandex_maps_mapkit/mapkit.dart' as ymk;
 import 'package:yandex_maps_mapkit/transport.dart' as tr;
 
+import 'crumbs.dart';
 import 'models.dart';
 
 /// Строит маршруты: на машине (с пробками), пешком и на общественном транспорте.
@@ -36,6 +37,7 @@ class RoutingService {
 
     final listener = dir.DrivingSessionRouteListener(
       onDrivingRoutes: (routes) {
+        Crumbs.mark('drive: получено маршрутов ${routes.length}');
         if (c.isCompleted) return;
         if (routes.isEmpty) {
           c.completeError(RouteException('Маршрут на машине не найден'));
@@ -48,10 +50,12 @@ class RoutingService {
         }
       },
       onDrivingRoutesError: (error) {
+        Crumbs.mark('drive: ошибка $error');
         if (!c.isCompleted) c.completeError(RouteException(error.toString()));
       },
     );
     _alive['drive'] = listener;
+    Crumbs.mark('drive: запрос');
     _drivingSession = _driving!.requestRoutes(
       dir.DrivingOptions(routesCount: 3),
       dir.DrivingVehicleOptions(),
@@ -67,24 +71,25 @@ class RoutingService {
     final meters = weight.distance.value.round();
 
     // Один цвет на каждый подряд идущий участок с одинаковыми пробками.
+    // Участки собираются прямо из точек маршрута.
+    final pts = r.geometry.points;
     final jams = r.jamSegments;
     final segments = <RouteSegment>[];
-    var i = 0;
-    while (i < jams.length) {
-      final type = jams[i].jamType;
-      var j = i;
-      while (j + 1 < jams.length && jams[j + 1].jamType == type) {
-        j++;
+    Crumbs.mark('drive: точек ${pts.length}, участков пробок ${jams.length}');
+    if (pts.length >= 2 && jams.length == pts.length - 1) {
+      var i = 0;
+      while (i < jams.length) {
+        final type = jams[i].jamType;
+        var j = i;
+        while (j + 1 < jams.length && jams[j + 1].jamType == type) {
+          j++;
+        }
+        segments.add(RouteSegment(
+          ymk.Polyline(pts.sublist(i, j + 2)),
+          _jamColor(type),
+        ));
+        i = j + 1;
       }
-      final sub = ymk.Subpolyline(
-        ymk.PolylinePosition(segmentIndex: i, segmentPosition: 0.0),
-        ymk.PolylinePosition(segmentIndex: j + 1, segmentPosition: 0.0),
-      );
-      segments.add(RouteSegment(
-        ymk.SubpolylineHelper.subpolyline(r.geometry, sub),
-        _jamColor(type),
-      ));
-      i = j + 1;
     }
     if (segments.isEmpty) {
       segments.add(RouteSegment(r.geometry, const Color(0xFF2F80ED)));
@@ -119,6 +124,7 @@ class RoutingService {
 
     final handler = tr.RouteHandler(
       onMasstransitRoutes: (routes) {
+        Crumbs.mark('walk: получено маршрутов ${routes.length}');
         if (c.isCompleted) return;
         if (routes.isEmpty) {
           c.completeError(RouteException('Пешеходный маршрут не найден'));
@@ -135,6 +141,7 @@ class RoutingService {
       },
     );
     _alive['walk'] = handler;
+    Crumbs.mark('walk: запрос');
     _pedestrianSession = _pedestrian!.requestRoutes(
       const tr.TimeOptions(),
       const tr.RouteOptions(tr.FitnessOptions()),
@@ -153,6 +160,7 @@ class RoutingService {
 
     final handler = tr.RouteHandler(
       onMasstransitRoutes: (routes) {
+        Crumbs.mark('transit: получено маршрутов ${routes.length}');
         if (c.isCompleted) return;
         if (routes.isEmpty) {
           c.completeError(RouteException(
@@ -170,6 +178,7 @@ class RoutingService {
       },
     );
     _alive['transit'] = handler;
+    Crumbs.mark('transit: запрос');
     _transitSession = _transit!.requestRoutes(
       const tr.TransitOptions(tr.TimeOptions()),
       const tr.RouteOptions(tr.FitnessOptions()),
@@ -207,6 +216,8 @@ class RoutingService {
       final sectionWeight = section.metadata.weight;
       final secs = sectionWeight.time.value.round();
       final poly = ymk.SubpolylineHelper.subpolyline(r.geometry, section.geometry);
+      final polyPoints = poly.points.length;
+      Crumbs.mark('transit: секция, точек $polyPoints');
       final transports = data.asVectorMasstransitTransport();
 
       if (transports != null && transports.isNotEmpty) {
@@ -231,7 +242,7 @@ class RoutingService {
         }
         final count = sectionStops.length > 1 ? sectionStops.length - 1 : 0;
 
-        segments.add(RouteSegment(poly, color));
+        if (polyPoints >= 2) segments.add(RouteSegment(poly, color));
         lines.add(LineInfo(kind: kind, label: label, color: color));
         steps.add(StepInfo(
           kind: StepKind.ride,
@@ -244,7 +255,9 @@ class RoutingService {
       } else {
         final meters = sectionWeight.walkingDistance.value.round();
         final isTransfer = data.asTransfer() != null;
-        segments.add(RouteSegment(poly, const Color(0xFF607D8B), width: 6.0));
+        if (polyPoints >= 2) {
+          segments.add(RouteSegment(poly, const Color(0xFF607D8B), width: 6.0));
+        }
         steps.add(StepInfo(
           kind: StepKind.walk,
           title: isTransfer ? 'Переход' : 'Пешком ${formatDistance(meters)}',

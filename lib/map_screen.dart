@@ -9,6 +9,7 @@ import 'package:yandex_maps_mapkit/mapkit_factory.dart';
 import 'package:yandex_maps_mapkit/yandex_map.dart';
 
 import 'config.dart';
+import 'crumbs.dart';
 import 'map_icons.dart';
 import 'models.dart';
 import 'routing.dart';
@@ -101,6 +102,33 @@ class _MapScreenState extends State<MapScreen> with WidgetsBindingObserver {
     if (kMapkitKey.isNotEmpty) mapkit.onStart();
     _fromFocus.addListener(() => _onFocus(_Field.from));
     _toFocus.addListener(() => _onFocus(_Field.to));
+    final previous = Crumbs.takePrevious();
+    Crumbs.mark('=== запуск ===');
+    if (previous != null) {
+      WidgetsBinding.instance.addPostFrameCallback((_) => _showPreviousLog(previous));
+    }
+  }
+
+  void _showPreviousLog(String text) {
+    if (!mounted) return;
+    showDialog<void>(
+      context: context,
+      builder: (ctx) => AlertDialog(
+        title: const Text('Журнал прошлого запуска'),
+        content: SizedBox(
+          width: double.maxFinite,
+          child: SingleChildScrollView(
+            child: SelectableText(text, style: const TextStyle(fontSize: 11)),
+          ),
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.of(ctx).pop(),
+            child: const Text('Закрыть'),
+          ),
+        ],
+      ),
+    );
   }
 
   @override
@@ -187,6 +215,7 @@ class _MapScreenState extends State<MapScreen> with WidgetsBindingObserver {
   /// Нажатие на карту: ставит точку с подписью адреса.
   void _onMapTap(ymk.Point p) {
     if (!mounted || _navigating || _searchOpen) return;
+    Crumbs.mark('нажатие на карту');
     _setPlaceFromMap(_picking ?? _Field.to, p);
   }
 
@@ -227,6 +256,7 @@ class _MapScreenState extends State<MapScreen> with WidgetsBindingObserver {
   // ---- отрисовка маршрутов и маркеров ----
 
   Future<void> _refreshIcons() async {
+    Crumbs.mark('значки: создание');
     try {
       final to = _to;
       if (to != null && _iconToText != to.name) {
@@ -241,6 +271,7 @@ class _MapScreenState extends State<MapScreen> with WidgetsBindingObserver {
         _iconFromText = from.name;
       }
     } catch (_) {}
+    Crumbs.mark('значки: готовы');
     if (mounted) _redraw();
   }
 
@@ -248,50 +279,66 @@ class _MapScreenState extends State<MapScreen> with WidgetsBindingObserver {
     final layer = _routeLayer;
     final markers = _markerLayer;
     if (layer == null || markers == null) return;
-    layer.clear();
-    markers.clear();
+    try {
+      Crumbs.mark('перерисовка: ${_mode.name}, fit=$fit');
+      layer.clear();
+      markers.clear();
 
-    final list = _results[_mode] ?? const <RouteResult>[];
-    final cur = _current;
-    if (_to != null && list.isNotEmpty && cur != null) {
-      for (var i = 0; i < list.length; i++) {
-        if (identical(list[i], cur)) continue;
-        layer.addPolylineWithGeometry(list[i].full)
-          ..strokeWidth = 6.0
-          ..setStrokeColor(Colors.grey.shade600)
-          ..outlineWidth = 1.5
-          ..outlineColor = Colors.white;
-      }
-      for (final seg in cur.segments) {
-        layer.addPolylineWithGeometry(seg.polyline)
-          ..strokeWidth = seg.width
-          ..setStrokeColor(seg.color)
-          ..outlineWidth = 2.5
-          ..outlineColor = Colors.white;
-      }
-      if (_mode == TravelMode.transit && _iconStop != null) {
-        for (final s in cur.stops) {
-          markers.addPlacemark()
-            ..geometry = s.point
-            ..setIcon(_iconStop!);
+      final list = _results[_mode] ?? const <RouteResult>[];
+      final cur = _current;
+      if (_to != null && list.isNotEmpty && cur != null) {
+        for (var i = 0; i < list.length; i++) {
+          if (identical(list[i], cur)) continue;
+          final n = list[i].full.points.length;
+          Crumbs.mark('перерисовка: запасной $i, точек $n');
+          if (n < 2) continue;
+          layer.addPolylineWithGeometry(list[i].full)
+            ..strokeWidth = 6.0
+            ..setStrokeColor(Colors.grey.shade600)
+            ..outlineWidth = 1.5
+            ..outlineColor = Colors.white;
+        }
+        var k = 0;
+        for (final seg in cur.segments) {
+          final n = seg.polyline.points.length;
+          Crumbs.mark('перерисовка: участок $k, точек $n');
+          k++;
+          if (n < 2) continue;
+          layer.addPolylineWithGeometry(seg.polyline)
+            ..strokeWidth = seg.width
+            ..setStrokeColor(seg.color)
+            ..outlineWidth = 2.5
+            ..outlineColor = Colors.white;
+        }
+        if (_mode == TravelMode.transit && _iconStop != null) {
+          Crumbs.mark('перерисовка: остановок ${cur.stops.length}');
+          for (final s in cur.stops) {
+            markers.addPlacemark()
+              ..geometry = s.point
+              ..setIcon(_iconStop!);
+          }
         }
       }
-    }
 
-    final from = _from;
-    if (from != null && _iconFrom != null) {
-      markers.addPlacemark()
-        ..geometry = from.point
-        ..setIcon(_iconFrom!);
+      final from = _from;
+      if (from != null && _iconFrom != null) {
+        Crumbs.mark('перерисовка: маркер «откуда»');
+        markers.addPlacemark()
+          ..geometry = from.point
+          ..setIcon(_iconFrom!);
+      }
+      final to = _to;
+      if (to != null && _iconTo != null) {
+        Crumbs.mark('перерисовка: маркер «куда»');
+        markers.addPlacemark()
+          ..geometry = to.point
+          ..setIcon(_iconTo!);
+      }
+      Crumbs.mark('перерисовка: готово');
+      if (fit && cur != null) _fit(cur.points);
+    } catch (e) {
+      Crumbs.mark('перерисовка: ОШИБКА $e');
     }
-    final to = _to;
-    if (to != null && _iconTo != null) {
-      markers.addPlacemark()
-        ..geometry = to.point
-        ..setIcon(_iconTo!);
-    }
-
-    if (fit && cur != null) _fit(cur.points);
   }
 
   double _log2(double x) => math.log(x) / math.ln2;
@@ -319,6 +366,8 @@ class _MapScreenState extends State<MapScreen> with WidgetsBindingObserver {
     final zoom = math.min(zLon, zLat).clamp(3.0, 17.0).toDouble();
     final latVisible = 360 * size.height * cosLat / (256 * math.pow(2, zoom));
     final centerLat = midLat - latVisible * 0.2;
+    Crumbs.mark('камера: zoom=$zoom lat=$centerLat lon=$midLon');
+    if (zoom.isNaN || centerLat.isNaN || midLon.isNaN) return;
     w.map.move(ymk.CameraPosition(
       ymk.Point(latitude: centerLat, longitude: midLon),
       zoom: zoom,
@@ -501,6 +550,7 @@ class _MapScreenState extends State<MapScreen> with WidgetsBindingObserver {
       return;
     }
     final gen = ++_gen;
+    Crumbs.mark('расчёт маршрутов: старт');
     setState(() {
       _results.clear();
       _errors.clear();
@@ -570,6 +620,7 @@ class _MapScreenState extends State<MapScreen> with WidgetsBindingObserver {
 
   void _startNav() {
     if (_current == null) return;
+    Crumbs.mark('в путь: старт');
     _posSub?.cancel();
     setState(() => _navigating = true);
     _posSub = Geolocator.getPositionStream(
@@ -579,10 +630,12 @@ class _MapScreenState extends State<MapScreen> with WidgetsBindingObserver {
       ),
     ).listen((p) {
       _me = ymk.Point(latitude: p.latitude, longitude: p.longitude);
+      final h = p.heading;
+      final azimuth = (h.isNaN || h < 0) ? 0.0 : h % 360;
       _window?.map.move(ymk.CameraPosition(
         _me!,
         zoom: 17.0,
-        azimuth: p.heading.isNaN ? 0.0 : p.heading,
+        azimuth: azimuth,
         tilt: _mode == TravelMode.drive ? 45.0 : 0.0,
       ));
     });
