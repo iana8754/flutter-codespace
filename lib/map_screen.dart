@@ -89,6 +89,19 @@ class _MapScreenState extends State<MapScreen> with WidgetsBindingObserver {
   bool _expanded = false;
   bool _navigating = false;
 
+  // ---- режим «В путь» ----
+  bool _follow = true;
+  bool _rerouting = false;
+  List<ymk.Point> _navPts = const [];
+  List<double> _navCum = const [];
+  int _navIdx = 0;
+  double _navRemainM = 0;
+  double _navRemainS = 0;
+  int _offRouteCount = 0;
+  int _navTick = 0;
+  double _lastAzimuth = 0.0;
+  DateTime _lastCam = DateTime.fromMillisecondsSinceEpoch(0);
+
   RouteResult? get _current {
     final list = _results[_mode];
     if (list == null || list.isEmpty) return null;
@@ -572,7 +585,13 @@ class _MapScreenState extends State<MapScreen> with WidgetsBindingObserver {
         _results[m] = list;
         _loading.remove(m);
       });
-      if (m == _mode) _redraw(fit: true);
+      if (m == _mode) {
+        _redraw(fit: !_navigating);
+        if (_navigating) {
+          _prepareNav();
+          _rerouting = false;
+        }
+      }
     }).catchError((Object e) {
       if (!mounted || gen != _gen) return;
       setState(() {
@@ -618,33 +637,141 @@ class _MapScreenState extends State<MapScreen> with WidgetsBindingObserver {
 
   // ======================= «В путь» =======================
 
-  void _startNav() {
+  double _meters(ymk.Point a, ymk.Point b) {
+    const r = 6371000.0;
+    final dLat = (b.latitude - a.latitude) * math.pi / 180;
+    final dLon = (b.longitude - a.longitude) * math.pi / 180;
+    final la = a.latitude * math.pi / 180;
+    final lb = b.latitude * math.pi / 180;
+    final h = math.pow(math.sin(dLat / 2), 2) +
+        math.cos(la) * math.cos(lb) * math.pow(math.sin(dLon / 2), 2);
+    return 2 * r * math.asin(math.min(1.0, math.sqrt(h)));
+  }
+
+  /// Считает длину маршрута по точкам, чтобы показывать остаток пути.
+  void _prepareNav() {
+    final cur = _current;
+    if (cur == null || cur.points.length < 2) return;
+    _navPts = cur.points;
+    final cum = <double>[0.0];
+    for (var i = 1; i < _navPts.length; i++) {
+      cum.add(cum.last + _meters(_navPts[i - 1], _navPts[i]));
+    }
+    _navCum = cum;
+    _navIdx = 0;
+    _navRemainM = cum.last;
+    _navRemainS = cur.seconds.toDouble();
+    _offRouteCount = 0;
+  }
+
+  void _moveCamera(ymk.Point point, double zoom, double azimuth) {
+    try {
+      _window?.map.move(ymk.CameraPosition(
+        point,
+        zoom: zoom,
+        azimuth: azimuth,
+        tilt: 0.0,
+      ));
+    } catch (e) {
+      Crumbs.mark('камера: ОШИБКА $e');
+    }
+  }
+
+  Future<void> _startNav() async {
     if (_current == null) return;
     Crumbs.mark('в путь: старт');
+    if (_me == null) await _ensureLocation();
+    if (!mounted) return;
+    _prepareNav();
     _posSub?.cancel();
-    setState(() => _navigating = true);
+    setState(() {
+      _navigating = true;
+      _follow = true;
+      _rerouting = false;
+      _navTick = 0;
+    });
+    final me = _me;
+    if (me != null) _moveCamera(me, 16.5, 0.0);
+    Crumbs.mark('в путь: подписка на GPS');
     _posSub = Geolocator.getPositionStream(
       locationSettings: const LocationSettings(
         accuracy: LocationAccuracy.high,
-        distanceFilter: 5,
+        distanceFilter: 3,
       ),
-    ).listen((p) {
-      _me = ymk.Point(latitude: p.latitude, longitude: p.longitude);
-      final h = p.heading;
-      final azimuth = (h.isNaN || h < 0) ? 0.0 : h % 360;
-      _window?.map.move(ymk.CameraPosition(
-        _me!,
-        zoom: 17.0,
-        azimuth: azimuth,
-        tilt: _mode == TravelMode.drive ? 45.0 : 0.0,
-      ));
-    });
+    ).listen(
+      _onNavPosition,
+      onError: (Object e) => Crumbs.mark('в путь: ошибка GPS $e'),
+    );
+  }
+
+  void _onNavPosition(Position p) {
+    if (!mounted || !_navigating) return;
+    try {
+      final me = ymk.Point(latitude: p.latitude, longitude: p.longitude);
+      _me = me;
+      _navTick++;
+      if (_navTick % 10 == 1) {
+        Crumbs.mark('в путь: GPS ${p.latitude.toStringAsFixed(5)} '
+            '${p.longitude.toStringAsFixed(5)} v=${p.speed.toStringAsFixed(1)}');
+      }
+
+      if (_navPts.length >= 2 && _navCum.length == _navPts.length) {
+        var best = _navIdx;
+        var bestD = double.infinity;
+        final end = math.min(_navPts.length, _navIdx + 300);
+        for (var i = _navIdx; i < end; i++) {
+          final d = _meters(me, _navPts[i]);
+          if (d < bestD) {
+            bestD = d;
+            best = i;
+          }
+        }
+        _navIdx = best;
+        final total = _navCum.last;
+        final remain = math.max(0.0, total - _navCum[best]);
+        final cur = _current;
+        final secs = (cur != null && total > 0) ? cur.seconds * remain / total : 0.0;
+        setState(() {
+          _navRemainM = remain;
+          _navRemainS = secs;
+        });
+
+        if (remain < 30) {
+          _toast('Вы прибыли');
+          _stopNav();
+          return;
+        }
+        _offRouteCount = bestD > 120 ? _offRouteCount + 1 : 0;
+        if (_offRouteCount >= 4 && !_rerouting && _from == null) {
+          _rerouting = true;
+          _offRouteCount = 0;
+          _toast('Вы отклонились от маршрута. Перестраиваю…');
+          _calculate();
+        }
+      }
+
+      if (_follow) {
+        final now = DateTime.now();
+        if (now.difference(_lastCam).inMilliseconds > 800) {
+          _lastCam = now;
+          if (p.speed > 1.0 && !p.heading.isNaN && p.heading >= 0) {
+            _lastAzimuth = p.heading % 360;
+          }
+          _moveCamera(me, 16.5, _lastAzimuth);
+        }
+      }
+    } catch (e) {
+      Crumbs.mark('в путь: ОШИБКА $e');
+    }
   }
 
   void _stopNav() {
     _posSub?.cancel();
     _posSub = null;
-    setState(() => _navigating = false);
+    setState(() {
+      _navigating = false;
+      _rerouting = false;
+    });
     _redraw(fit: true);
   }
 
@@ -1175,13 +1302,18 @@ class _MapScreenState extends State<MapScreen> with WidgetsBindingObserver {
 
   // ---- Панель во время поездки ----
 
+  String _hhmm(DateTime t) =>
+      '${t.hour.toString().padLeft(2, '0')}:${t.minute.toString().padLeft(2, '0')}';
+
   Widget _navBar(ColorScheme scheme) {
-    final r = _current;
-    final detail = r == null
+    final waiting = _rerouting || _current == null;
+    final secs = _navRemainS.round();
+    final headline = waiting
+        ? 'Перестраиваем маршрут…'
+        : '${formatDuration(secs)} · ${formatDistance(_navRemainM.round())}';
+    final eta = waiting
         ? ''
-        : _mode == TravelMode.transit
-            ? '${formatDuration(r.seconds)} · пешком ${formatDistance(r.walkMeters)}'
-            : '${formatDuration(r.seconds)} · ${formatDistance(r.meters)}';
+        : 'Прибытие в ${_hhmm(DateTime.now().add(Duration(seconds: secs)))} · ';
     return Material(
       elevation: 12,
       color: scheme.surface,
@@ -1189,7 +1321,7 @@ class _MapScreenState extends State<MapScreen> with WidgetsBindingObserver {
       child: SafeArea(
         top: false,
         child: Padding(
-          padding: const EdgeInsets.all(16),
+          padding: const EdgeInsets.fromLTRB(16, 14, 8, 14),
           child: Row(
             children: [
               Icon(_mode.icon),
@@ -1199,14 +1331,22 @@ class _MapScreenState extends State<MapScreen> with WidgetsBindingObserver {
                   crossAxisAlignment: CrossAxisAlignment.start,
                   children: [
                     Text(
-                      _to?.name ?? '',
+                      headline,
+                      style: const TextStyle(fontSize: 20, fontWeight: FontWeight.w700),
+                    ),
+                    Text(
+                      '$eta${_to?.name ?? ''}',
                       maxLines: 1,
                       overflow: TextOverflow.ellipsis,
-                      style: Theme.of(context).textTheme.titleMedium,
+                      style: TextStyle(fontSize: 12, color: scheme.onSurfaceVariant),
                     ),
-                    Text(detail),
                   ],
                 ),
+              ),
+              IconButton(
+                tooltip: _follow ? 'Не следить за мной' : 'Следить за мной',
+                onPressed: () => setState(() => _follow = !_follow),
+                icon: Icon(_follow ? Icons.my_location : Icons.location_searching),
               ),
               FilledButton.tonal(onPressed: _stopNav, child: const Text('Завершить')),
             ],
